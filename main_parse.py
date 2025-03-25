@@ -85,8 +85,8 @@ def get_datas_from_parsed(parsed: list[str]):
 
 
 def main(
-    q: Annotated[
-        str,
+    queries: Annotated[
+        list[str],
         typer.Argument(
             help="Search query",
         ),
@@ -112,78 +112,78 @@ def main(
     driver = ChromiumPage(addr_or_opts=co)
     if headless:
         atexit.register(driver.quit)
-    tab = driver.latest_tab
-    assert not isinstance(tab, str)
-    url = URL("https://www.google.com/search") % {"q": q, "udm": 2}
-    tab.get(str(url))
-    tab.listen.start("https://www.google.com/search")
-    for _ in range(3):
-        tab.scroll.to_bottom()
-        time.sleep(0.5)
-    packet = tab.listen.wait(count=1)
-    assert isinstance(packet, DataPacket)
-    api_url = packet.url
-    logger.info(f"Api url: {api_url}")
-    tab.listen.stop()
-    driver.close()
 
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": packet.request.headers["User-Agent"],
-            "Cookie": packet.request.headers["Cookie"],
-        }
-    )
+    for q in queries:
+        logger.info(f"Processing query: {q}")
+        url = URL("https://www.google.com/search") % {"q": q, "udm": 2}
+        tab = driver.new_tab(str(url))
+        tab.listen.start("https://www.google.com/search")
+        for _ in range(3):
+            tab.scroll.to_bottom()
+            time.sleep(0.5)
+        packet = tab.listen.wait(count=1)
+        assert isinstance(packet, DataPacket)
+        api_url = packet.url
+        tab.listen.stop()
+        tab.close()
 
-    debug_files_dir = pathlib.Path(f"./output_debug/{q}/")
-    if write_debug_files:
-        debug_files_dir.mkdir(exist_ok=True, parents=True)
-    output_dir = pathlib.Path("./output/")
-    output_dir.mkdir(exist_ok=True)
+        session = requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": packet.request.headers["User-Agent"],
+                "Cookie": packet.request.headers["Cookie"],
+            }
+        )
 
-    start = 0
-    all_datas = []
-    while True:
-        url = str(URL(api_url) % {"start": start})
-        logger.info(f"Requesting {start=}")
-        response = session.get(url)
-        response.raise_for_status()
-
+        debug_files_dir = pathlib.Path(f"./output_debug/{q}/")
         if write_debug_files:
-            (debug_files_dir / f"{start:04d}-response.txt").write_bytes(
-                response.content
-            )
+            debug_files_dir.mkdir(exist_ok=True, parents=True)
+        output_dir = pathlib.Path("./output/")
+        output_dir.mkdir(exist_ok=True)
 
-        parsed = list(parse_search(response.text))
-        if write_debug_files:
-            (debug_files_dir / f"{start:04d}-parsed0.json").write_text(
-                json.dumps(parsed, indent=4, ensure_ascii=False)
-            )
+        start = 0
+        all_datas = []
+        while True:
+            url = str(URL(api_url) % {"start": start})
+            logger.info(f"Requesting {start=}")
+            response = session.get(url)
+            response.raise_for_status()
 
-        datas = get_datas_from_parsed(parsed)
-        if datas is None:
-            break
+            if write_debug_files:
+                (debug_files_dir / f"{start:04d}-response.txt").write_bytes(
+                    response.content
+                )
 
-        if write_debug_files:
-            (debug_files_dir / f"{start:04d}-parsed1.json").write_text(
-                json.dumps(datas, indent=4, ensure_ascii=False)
-            )
+            parsed = list(parse_search(response.text))
+            if write_debug_files:
+                (debug_files_dir / f"{start:04d}-parsed0.json").write_text(
+                    json.dumps(parsed, indent=4, ensure_ascii=False)
+                )
 
-        datas = [get_image_data(i) for i in datas]
-        datas = [i for i in datas if i is not None]
-        if write_debug_files:
-            (debug_files_dir / f"{start:04d}-parsed2.json").write_text(
-                json.dumps(datas, indent=4, ensure_ascii=False)
-            )
+            datas = get_datas_from_parsed(parsed)
+            if datas is None:
+                break
 
-        all_datas.extend(datas)
-        logger.info(f"Get: {len(datas)}")
-        start += 10
+            if write_debug_files:
+                (debug_files_dir / f"{start:04d}-parsed1.json").write_text(
+                    json.dumps(datas, indent=4, ensure_ascii=False)
+                )
 
-    logger.info(f"Total: {len(all_datas)}")
-    (output_dir / f"{q}.json").write_text(
-        json.dumps(all_datas, indent=4, ensure_ascii=False)
-    )
+            datas = [get_image_data(i) for i in datas]
+            datas = [i for i in datas if i is not None]
+            if write_debug_files:
+                (debug_files_dir / f"{start:04d}-parsed2.json").write_text(
+                    json.dumps(datas, indent=4, ensure_ascii=False)
+                )
+
+            all_datas.extend(datas)
+            logger.info(f"Get: {len(datas)}")
+            start += 10
+
+        logger.info(f"Total: {len(all_datas)}")
+        (output_dir / f"{q}.json").write_text(
+            json.dumps(all_datas, indent=4, ensure_ascii=False)
+        )
 
 
 if __name__ == "__main__":
