@@ -13,14 +13,13 @@ import itertools
 import json
 import pathlib
 import time
-from typing import Annotated, Any, NamedTuple, Sequence, TypedDict, cast
+from typing import Annotated
 from loguru import logger
 import requests
 import typer
 from yarl import URL
 from DrissionPage import ChromiumOptions, ChromiumPage
 from DrissionPage._units.listener import DataPacket
-from DrissionPage._pages.mix_tab import MixTab
 
 PREFIX = ")]}'\n"
 
@@ -46,95 +45,43 @@ def parse_search(body: str):
         index = end
 
 
-def from_iterable(cls, s: Sequence):
-    s = s[: len(cls.__annotations__)]
-    return cls(*s)
-
-
-class ResultEncrypted(NamedTuple):
-    field0_url: str
-    field1_height: int
-    field2_width: int
-
-
-class ResultImage(NamedTuple):
-    field0_url: str
-    field1_height: int
-    field2_width: int
-
-
-class ResultMetadata2003(NamedTuple):
-    field0: Any
-    field1: Any
-    field2_source: str
-    field3_title: str
-
-
-ResultMetadata = TypedDict(
-    "ResultMetadata",
-    {
-        "2000": Any,
-        "2001": Any,
-        "2003": ResultMetadata2003,
-        "2008": Any,
-    },
-)
-
-
-class Result3(NamedTuple):
-    field0: Any
-    field1: Any
-    field2_encrypted: ResultEncrypted
-    field3_image: ResultImage
-    field4: Any
-    field5: Any
-    field6: Any
-    field7: Any
-    field8: Any
-    field9_metadata: ResultMetadata
-
-
-class Result2(NamedTuple):
-    field0: Any
-    field1_result3: Result3
-    field2: Any
-    field3: Any
-    field4: Any
-    field5: Any
-    field6: Any
-    field7: Any
-
-
-class Result1(NamedTuple):
-    field0: Any
-    field1_result2: Result2
-
-
-class Result0(NamedTuple):
-    field0: Any
-    field1: Any
-    field2: Any
-    field3: Any
-    field4: Any
-    field5: Any = None
-    field6_result1_str: str | None = None
-
-
 def get_image_data(d):
-    result1 = from_iterable(Result1, d)
-    result2 = from_iterable(Result2, result1.field1_result2)
-    result3 = from_iterable(Result3, result2.field1_result3)
-    image = from_iterable(ResultImage, result3.field3_image)
+    try:
+        _, result2, *_ = d
+        if not result2 or len(result2) < 2:
+            return None
+        _, result3, *_ = result2
+        if not result3:
+            return None
+        _, _, _, image, *_, metadata = result3
+        url, height, width, *_ = image
+        _, _, source, title, *_ = metadata["2003"]
 
-    metadata = result3.field9_metadata
-    metadata2003 = from_iterable(ResultMetadata2003, metadata["2003"])
-    return {
-        "url": image.field0_url,
-        "height": image.field1_height,
-        "width": image.field2_width,
-        "source": metadata2003.field2_source,
-        "title": metadata2003.field3_title,
-    }
+        return {
+            "url": url,
+            "height": height,
+            "width": width,
+            "source": source,
+            "title": title,
+        }
+    except Exception:
+        logger.error(f"Failed to parse data: {d}")
+        return None
+
+
+def get_datas_from_parsed(parsed: list[str]):
+    datas_str_index = 6
+    if len(parsed) < datas_str_index + 1:
+        logger.info("No more results")
+        return None
+
+    datas_str = parsed[datas_str_index]
+
+    datas = [
+        [k, json.loads(v)]
+        for k, v in itertools.chain.from_iterable(json.loads(datas_str))
+    ]
+    return datas
 
 
 def main(
@@ -162,15 +109,11 @@ def main(
     co.set_pref("intl.accept_languages", "en-US")
     co.set_argument("--accept-lang=en-US")
     co.headless(headless)
-
     driver = ChromiumPage(addr_or_opts=co)
     if headless:
         atexit.register(driver.quit)
-
-    driver = ChromiumPage(addr_or_opts=co)
     tab = driver.latest_tab
     assert not isinstance(tab, str)
-    tab = cast(MixTab, tab)
     url = URL("https://www.google.com/search") % {"q": q, "udm": 2}
     tab.get(str(url))
     tab.listen.start("https://www.google.com/search")
@@ -217,18 +160,9 @@ def main(
                 json.dumps(parsed, indent=4, ensure_ascii=False)
             )
 
-        result0 = from_iterable(Result0, parsed)
-
-        if not result0.field6_result1_str:
-            logger.info("No more results")
+        datas = get_datas_from_parsed(parsed)
+        if datas is None:
             break
-
-        datas = [
-            [k, json.loads(v)]
-            for k, v in itertools.chain.from_iterable(
-                i[2:-1] for i in json.loads(result0.field6_result1_str)
-            )
-        ]
 
         if write_debug_files:
             (debug_files_dir / f"{start:04d}-parsed1.json").write_text(
@@ -236,6 +170,7 @@ def main(
             )
 
         datas = [get_image_data(i) for i in datas]
+        datas = [i for i in datas if i is not None]
         if write_debug_files:
             (debug_files_dir / f"{start:04d}-parsed2.json").write_text(
                 json.dumps(datas, indent=4, ensure_ascii=False)
