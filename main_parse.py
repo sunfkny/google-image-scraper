@@ -8,6 +8,7 @@
 # ]
 # ///
 import atexit
+import itertools
 import json
 import pathlib
 import time
@@ -96,6 +97,16 @@ class Result1(NamedTuple):
     field1_result2: Result2
 
 
+class Result0(NamedTuple):
+    field0: Any
+    field1: Any
+    field2: Any
+    field3: Any
+    field4: Any
+    field5: Any = None
+    field6_result1_str: str | None = None
+
+
 def get_image_data(d):
     result1 = from_iterable(Result1, d)
     result2 = from_iterable(Result2, result1.field1_result2)
@@ -168,41 +179,63 @@ def main(
         }
     )
 
+    debug_files_dir = pathlib.Path(f"./output_debug/{q}/")
+    if write_debug_files:
+        debug_files_dir.mkdir(exist_ok=True, parents=True)
+    output_dir = pathlib.Path("./output/")
+    output_dir.mkdir(exist_ok=True)
+
     start = 0
+    all_datas = []
     while True:
         url = str(URL(api_url) % {"start": start})
         logger.info(f"Requesting {start=}")
         response = session.get(url)
         response.raise_for_status()
 
-        parsed = [part for part in parse_search(response.text)]
         if write_debug_files:
-            pathlib.Path("./parsed0.json").write_text(
+            (debug_files_dir / f"{start:04d}-response.txt").write_bytes(
+                response.content
+            )
+
+        parsed = list(parse_search(response.text))
+        if write_debug_files:
+            (debug_files_dir / f"{start:04d}-parsed0.json").write_text(
                 json.dumps(parsed, indent=4, ensure_ascii=False)
             )
 
-        if len(parsed) < 7:
+        result0 = from_iterable(Result0, parsed)
+
+        if not result0.field6_result1_str:
             logger.info("No more results")
             break
 
-        data = json.loads(parsed[6])[0][2:-1]
-        data = [[k, json.loads(v)] for k, v in data]
+        datas = [
+            [k, json.loads(v)]
+            for k, v in itertools.chain.from_iterable(
+                i[2:-1] for i in json.loads(result0.field6_result1_str)
+            )
+        ]
 
         if write_debug_files:
-            pathlib.Path("./parsed1.json").write_text(
-                json.dumps(data, indent=4, ensure_ascii=False)
+            (debug_files_dir / f"{start:04d}-parsed1.json").write_text(
+                json.dumps(datas, indent=4, ensure_ascii=False)
             )
 
-        data = [get_image_data(i) for i in data]
+        datas = [get_image_data(i) for i in datas]
         if write_debug_files:
-            pathlib.Path("./parsed_result.json").write_text(
-                json.dumps(data, indent=4, ensure_ascii=False)
+            (debug_files_dir / f"{start:04d}-parsed2.json").write_text(
+                json.dumps(datas, indent=4, ensure_ascii=False)
             )
 
-        for i in data:
-            logger.info(i)
-        logger.info(f"Total: {len(data)} ({start=})")
+        all_datas.extend(datas)
+        logger.info(f"Get: {len(datas)}")
         start += 10
+
+    logger.info(f"Total: {len(all_datas)}")
+    (output_dir / f"{q}.json").write_text(
+        json.dumps(all_datas, indent=4, ensure_ascii=False)
+    )
 
 
 if __name__ == "__main__":
