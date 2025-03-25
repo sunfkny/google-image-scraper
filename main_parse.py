@@ -7,6 +7,7 @@
 #     "yarl>=1.18.3",
 # ]
 # ///
+import array
 import atexit
 import itertools
 import json
@@ -26,11 +27,23 @@ PREFIX = ")]}'\n"
 
 def parse_search(body: str):
     body = body.removeprefix(PREFIX)
-    while body:
-        seg_len_str_index = body.index(";")
-        seg_len = int(body[:seg_len_str_index], 16)
-        yield body[seg_len_str_index + 1 : seg_len_str_index + 1 + seg_len]
-        body = body[seg_len_str_index + 1 + seg_len :]
+    utf16_units = array.array("H", body.encode("utf-16-le"))
+    index = 0
+    while index < len(utf16_units):
+        if ord(";") in utf16_units[index:]:
+            seg_len_str_index = index + utf16_units[index:].index(ord(";"))
+        else:
+            break
+
+        seg_len = int("".join(map(chr, utf16_units[index:seg_len_str_index])), 16)
+
+        start = seg_len_str_index + 1
+        end = start + seg_len
+        segment = utf16_units[start:end]
+
+        yield segment.tobytes().decode("utf-16-le")
+
+        index = end
 
 
 def from_iterable(cls, s: Sequence):
